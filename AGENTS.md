@@ -4,28 +4,32 @@ Operating contract for [localjev-spark](https://github.com/rimusz/localjev-spark
 
 ## What this repo is
 
-Python service: local System One on `:8090` and a soft OpenAI chat proxy to a live NVIDIA DGX Spark (or any OpenAI `/v1`) on `:8091`. Backend default is Laya (`LOCALJEV_BACKEND`). Keep Python while Laya/HF is the classifier.
+Python service: local System One judge on `:8090` and a soft OpenAI chat proxy to a live Spark (or any `/v1`) on `:8091`. Default backend is Laya. Keep Python while that is true. Product and install narrative: `README.md`.
 
-## Agent skill (keep copies in sync)
+## Skill copies (must stay identical)
 
-| Client | Path |
-|--------|------|
-| Cursor | `.cursor/skills/localjev-spark/` |
-| Claude Code | `.claude/skills/localjev-spark/` and `.agents/skills/localjev-spark/` |
-| Codex | `.codex/skills/localjev-spark/` |
-| Grok | `.grok/skills/localjev-spark/` |
+`localjev-spark` (install) and `localjev-auto` (use beside TypeSafe Jev). Copy **both** trees.
 
-When you edit the skill, update **all** copies (same `SKILL.md`).
+| Client | Repo path | User-global install |
+|--------|-----------|---------------------|
+| Cursor | `.cursor/skills/localjev-*` | `~/.cursor/skills/` |
+| Claude Code | `.claude/skills/` and `.agents/skills/` | `~/.claude/skills/` |
+| Codex | `.codex/skills/` | `~/.codex/skills/` |
+| Grok | `.grok/skills/` | `~/.grok/skills/` |
+
+TypeSafe Jev stays `[mcp_servers.jev]` + `jev-auto`. Agents must label which Jev ran.
 
 ## Do
 
-- Install via `./scripts/install.sh` or `localjev-spark serve`.
-- Health-check `:8090` and `:8091` after install or config change.
-- Point chat clients at `:8091/v1` only.
+- Install with `./scripts/install.sh` (or the curl-pipe installer from any directory); wait for `:8090` **HTTP 200** (Laya loaded) and `:8091` **HTTP 200** (process up). `:8090` is 503 while loading or if load failed. `:8091` stays 200 even when Spark is missing.
+- Chat clients → `:8091/v1` only. Print the provider row; do **not** write AGNT / Grok / Codex / CodexGateway config.
+- Uninstall: `localjev-spark uninstall` (keep venv) or `uninstall --purge`. Never delete TypeSafe `jev-auto` or Jev MCP.
+- Default bind is `0.0.0.0` with no auth. Trusted LAN/VPN only, or `LOCALJEV_BIND=127.0.0.1`.
+- `LOCALJEV_REPO` must be Laya-compatible. Soft fail is judge-predict-fail, not process-down.
 
 ## Do not
 
-- Treat `:8090` as a chat provider.
-- Switch Spark slots or run `sm start` from this process.
-- Replace hosted TypeSafe Jev MCP with this service.
-- Rewrite the Laya path in Rust unless the user explicitly drops that backend.
+- Treat `:8090` as chat.
+- Run `sm start` or switch Spark slots from this process.
+- Replace hosted TypeSafe Jev MCP.
+- Rewrite Laya in Rust unless the user drops that backend.

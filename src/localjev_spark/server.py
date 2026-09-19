@@ -6,12 +6,23 @@ import asyncio
 import json
 import logging
 import os
+import threading
+import time
 from typing import Any
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+
+from localjev_spark.util import (
+    DROP_RESPONSE_EXTRA,
+    LoopBoundLock,
+    filter_hop_headers,
+    last_user_text,
+    parse_upstream,
+    truncate,
+)
 
 LOG = logging.getLogger("localjev-spark")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -41,21 +52,11 @@ SPARK_PORTS = tuple(
     for p in _env("LOCALJEV_SPARK_PORTS", default="8000,8001,8002").split(",")
     if p.strip()
 )
-SLOT_FOR_PORT = {8000: "qwen", 8001: "deepseek", 8002: "ling"}
 UPSTREAM_OVERRIDE = _env("LOCALJEV_SPARK_UPSTREAM").rstrip("/")
+PROBE_TTL = float(_env("LOCALJEV_PROBE_TTL", default="5"))
 
+# Chat hop only — slot routing is noise on Laya; callers still send any questions to :8090.
 CLASSIFY_QUESTIONS: dict[str, Any] = {
-    "slot": {
-        "type": "choice",
-        "instructions": "Which handler should serve this user request?",
-        "criteria": {
-            "qwen": "General chat, coding help, summarization",
-            "deepseek": "Hard reasoning, long context, or math",
-            "ling": "Fast or Chinese-first chat",
-            "local_code": "Should stay on local coding CLIs, not Spark",
-            "human": "Needs a human, not an LLM",
-        },
-    },
     "needs_trade_confirm": {
         "type": "noul",
         "instructions": "Does this request ask to place or confirm a financial trade?",
@@ -68,10 +69,15 @@ CLASSIFY_QUESTIONS: dict[str, Any] = {
 
 _agent: Any = None
 _agent_error: str | None = None
+_load_done = False
+_classify_lock = threading.Lock()
+_cached_base: str | None = None
+_cached_at = 0.0
+_probe_lock = LoopBoundLock()
 
 
 def _load_backend() -> None:
-    global _agent, _agent_error
+    global _agent, _agent_error, _load_done
     os.environ.setdefault("USE_TF", "0")
     try:
         if BACKEND in {"laya", "localjev"}:
@@ -89,53 +95,43 @@ def _load_backend() -> None:
         _agent = None
         _agent_error = str(exc)
         LOG.exception("backend load failed: %s", exc)
-
-
-def _last_user_text(body: dict[str, Any]) -> str:
-    messages = body.get("messages") or []
-    for msg in reversed(messages):
-        if not isinstance(msg, dict) or msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
-            parts = [
-                str(part.get("text") or "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            ]
-            return " ".join(parts).strip()
-    return ""
-
-
-def _truncate(text: str, limit: int = 480) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"
+    finally:
+        _load_done = True
 
 
 def classify(state: Any, questions: dict[str, Any]) -> dict[str, Any]:
     if _agent is None:
         raise RuntimeError(_agent_error or "localjev backend not loaded")
-    return _agent.predict(state, questions)
+    with _classify_lock:
+        return _agent.predict(state, questions)
 
 
 judge = FastAPI(title="localjev-spark-judge")
 proxy = FastAPI(title="localjev-spark-proxy")
 
 
-@judge.get("/health")
-def judge_health() -> dict[str, Any]:
-    ok = _agent is not None
+def _judge_payload() -> dict[str, Any]:
+    if _agent is not None:
+        status = "OK"
+    elif not _load_done:
+        status = "loading"
+    else:
+        status = "DEGRADED"
     return {
-        "status": "OK" if ok else "DEGRADED",
+        "status": status,
         "service": "localjev-spark",
         "backend": BACKEND,
         "model": MODEL_REPO,
         "subfolder": MODEL_SUBFOLDER,
         "error": _agent_error,
     }
+
+
+@judge.get("/health")
+def judge_health() -> JSONResponse:
+    payload = _judge_payload()
+    code = 200 if payload["status"] == "OK" else 503
+    return JSONResponse(payload, status_code=code)
 
 
 @judge.post("/v1/systemone")
@@ -163,31 +159,63 @@ async def systemone(request: Request) -> JSONResponse:
     )
 
 
-async def _probe_spark() -> tuple[str, int] | None:
-    if UPSTREAM_OVERRIDE:
-        rest = UPSTREAM_OVERRIDE.replace("http://", "").replace("https://", "")
-        hostport = rest.split("/")[0]
-        host, _, port_s = hostport.partition(":")
-        return host, int(port_s or "8000")
-    timeout = httpx.Timeout(3.0, connect=2.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for host in SPARK_HOSTS:
-            for port in SPARK_PORTS:
-                url = f"http://{host}:{port}/v1/models"
+async def _models_ok(client: httpx.AsyncClient, base: str) -> bool:
+    try:
+        r = await client.get(f"{base.rstrip('/')}/models")
+        return r.status_code < 500 and bool(r.content)
+    except httpx.HTTPError:
+        return False
+
+
+def _clear_spark_cache() -> None:
+    """Drop cached Spark base. Caller must already hold ``_probe_lock``."""
+    global _cached_base, _cached_at
+    _cached_base = None
+    _cached_at = 0.0
+
+
+async def _invalidate_spark_cache() -> None:
+    async with _probe_lock.get():
+        _clear_spark_cache()
+
+
+async def _probe_spark() -> str | None:
+    """Return live OpenAI base (`http://host:port/v1`) or None. Cached for PROBE_TTL seconds."""
+    global _cached_base, _cached_at
+    now = time.monotonic()
+    async with _probe_lock.get():
+        if _cached_base and (now - _cached_at) < PROBE_TTL:
+            return _cached_base
+        timeout = httpx.Timeout(3.0, connect=2.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            if UPSTREAM_OVERRIDE:
                 try:
-                    r = await client.get(url)
-                    if r.status_code < 500 and r.content:
-                        return host, port
-                except httpx.HTTPError:
-                    continue
-    return None
+                    base = parse_upstream(UPSTREAM_OVERRIDE)
+                except ValueError:
+                    _clear_spark_cache()
+                    return None
+                if await _models_ok(client, base):
+                    _cached_base = base
+                    _cached_at = time.monotonic()
+                    return base
+                _clear_spark_cache()
+                return None
+            for host in SPARK_HOSTS:
+                for port in SPARK_PORTS:
+                    base = f"http://{host}:{port}/v1"
+                    if await _models_ok(client, base):
+                        _cached_base = base
+                        _cached_at = time.monotonic()
+                        return base
+        _clear_spark_cache()
+        return None
 
 
 def _classify_chat(text: str) -> tuple[dict[str, Any] | None, str]:
     if not text or _agent is None:
         return None, "bypass"
     try:
-        raw = classify(_truncate(text), CLASSIFY_QUESTIONS)
+        raw = classify(truncate(text), CLASSIFY_QUESTIONS)
         answers = raw.get("answers", raw) if isinstance(raw, dict) else raw
         LOG.info("classify %s", json.dumps(answers, default=str)[:800])
         return answers if isinstance(answers, dict) else None, "ok"
@@ -197,15 +225,17 @@ def _classify_chat(text: str) -> tuple[dict[str, Any] | None, str]:
 
 
 @proxy.get("/health")
-async def proxy_health() -> dict[str, Any]:
+async def proxy_health() -> JSONResponse:
     live = await _probe_spark()
-    return {
+    payload = {
         "status": "OK" if live else "DEGRADED",
         "service": "localjev-spark",
         "backend": BACKEND,
         "localjev": _agent is not None,
-        "spark": f"http://{live[0]}:{live[1]}/v1" if live else None,
+        "spark": live,
     }
+    # Process-up is 200 even with no Spark — that is not a localjev outage.
+    return JSONResponse(payload, status_code=200)
 
 
 @proxy.api_route("/v1/{path:path}", methods=["GET", "POST"])
@@ -213,8 +243,7 @@ async def openai_passthrough(path: str, request: Request) -> Response:
     live = await _probe_spark()
     if live is None:
         return JSONResponse({"error": "no Spark slot is up"}, status_code=503)
-    host, port = live
-    upstream = f"http://{host}:{port}/v1/{path}"
+    upstream = f"{live.rstrip('/')}/{path}"
     raw = await request.body()
     jev_status = "skip"
     if path.rstrip("/") == "chat/completions" and request.method == "POST":
@@ -222,20 +251,10 @@ async def openai_passthrough(path: str, request: Request) -> Response:
             body = json.loads(raw.decode("utf-8") or "{}")
         except Exception:
             body = {}
-        text = _last_user_text(body if isinstance(body, dict) else {})
-        answers, jev_status = await asyncio.to_thread(_classify_chat, text)
-        live_slot = SLOT_FOR_PORT.get(port, str(port))
-        if answers:
-            slot = answers.get("slot") or {}
-            choice = slot.get("choice") if isinstance(slot, dict) else None
-            if choice and choice != live_slot:
-                LOG.info("slot mismatch choice=%s live=%s (no slot switch)", choice, live_slot)
+        text = last_user_text(body if isinstance(body, dict) else {})
+        _answers, jev_status = await asyncio.to_thread(_classify_chat, text)
 
-    headers = {
-        k: v
-        for k, v in request.headers.items()
-        if k.lower() not in {"host", "content-length"}
-    }
+    headers = filter_hop_headers(request.headers)
     timeout = httpx.Timeout(600.0, connect=5.0)
     client = httpx.AsyncClient(timeout=timeout)
     req = client.build_request(request.method, upstream, content=raw, headers=headers)
@@ -243,11 +262,12 @@ async def openai_passthrough(path: str, request: Request) -> Response:
         resp = await client.send(req, stream=True)
     except httpx.HTTPError as exc:
         await client.aclose()
+        await _invalidate_spark_cache()
         return JSONResponse({"error": str(exc)}, status_code=502)
 
-    out_headers = dict(resp.headers)
+    out_headers = filter_hop_headers(resp.headers, extra=DROP_RESPONSE_EXTRA)
     out_headers["x-localjev-status"] = jev_status
-    out_headers["x-localjev-spark"] = f"{host}:{port}"
+    out_headers["x-localjev-spark"] = live
     out_headers["x-localjev-backend"] = BACKEND
 
     async def stream():
@@ -266,7 +286,11 @@ async def openai_passthrough(path: str, request: Request) -> Response:
 
 async def run() -> None:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _load_backend)
+    load_fut = loop.run_in_executor(None, _load_backend)
     cfg_a = uvicorn.Config(judge, host=BIND, port=JUDGE_PORT, log_level="info")
     cfg_b = uvicorn.Config(proxy, host=BIND, port=PROXY_PORT, log_level="info")
-    await asyncio.gather(uvicorn.Server(cfg_a).serve(), uvicorn.Server(cfg_b).serve())
+    await asyncio.gather(
+        uvicorn.Server(cfg_a).serve(),
+        uvicorn.Server(cfg_b).serve(),
+        load_fut,
+    )

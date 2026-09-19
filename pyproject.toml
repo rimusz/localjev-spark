@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-laya = ["laya"]
+laya = ["laya>=0.3.3,<0.4"]
 
 [project.scripts]
 localjev-spark = "localjev_spark.__main__:main"

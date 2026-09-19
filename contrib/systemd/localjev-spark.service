@@ -6,6 +6,9 @@ After=network-online.target
 Type=simple
 WorkingDirectory=%h/.localjev-spark
 Environment=USE_TF=0
+Environment=LOCALJEV_BIND=0.0.0.0
+# Trusted-net only (no auth). Loopback: LOCALJEV_BIND=127.0.0.1
+# EnvironmentFile=-%h/.config/localjev-spark/localjev.env
 ExecStart=%h/.localjev-spark/.venv/bin/localjev-spark serve
 Restart=on-failure
 RestartSec=3
