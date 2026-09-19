@@ -1,0 +1,56 @@
+name: Tag on main
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: tag-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create next patch tag
+        run: |
+          set -euo pipefail
+
+          if existing="$(git describe --exact-match --tags HEAD 2>/dev/null)"; then
+            echo "HEAD already tagged: ${existing}"
+            exit 0
+          fi
+
+          latest="$(git tag --list 'v*.*.*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+          if [ -z "${latest}" ]; then
+            py_ver="$(python3 -c 'import pathlib,re; m=re.search(r"^version = \"([^\"]+)\"", pathlib.Path("pyproject.toml").read_text(), re.M); print(m.group(1) if m else "")')"
+            if [ -z "${py_ver}" ]; then
+              echo "no tags and no version in pyproject.toml" >&2
+              exit 1
+            fi
+            new_tag="v${py_ver}"
+          else
+            ver="${latest#v}"
+            IFS=. read -r major minor patch <<< "${ver}"
+            new_tag="v${major}.${minor}.$((patch + 1))"
+          fi
+
+          if git rev-parse -q --verify "refs/tags/${new_tag}" >/dev/null; then
+            echo "tag ${new_tag} already exists" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${new_tag}" -m "${new_tag}"
+          git push origin "refs/tags/${new_tag}"
+          echo "tagged ${new_tag}"

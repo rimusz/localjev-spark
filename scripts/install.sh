@@ -141,7 +141,7 @@ if [ "${uname_s}" = "Darwin" ]; then
 </plist>
 EOF
     launchctl bootout "gui/$(id -u)/${MAC_LABEL}" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "${PLIST}"
+    launchctl bootstrap "gui/$(id -u)" "${PLIST}" 2>/dev/null || true
     launchctl kickstart -k "gui/$(id -u)/${MAC_LABEL}"
     echo "launchd ${MAC_LABEL} started"
 elif [ "${uname_s}" = "Linux" ]; then
