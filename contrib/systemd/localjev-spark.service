@@ -1,0 +1,14 @@
+[Unit]
+Description=localjev-spark judge + Spark chat proxy
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.localjev-spark
+Environment=USE_TF=0
+ExecStart=%h/.localjev-spark/.venv/bin/localjev-spark serve
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
