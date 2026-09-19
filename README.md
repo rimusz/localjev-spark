@@ -85,6 +85,10 @@ curl -s http://127.0.0.1:8090/v1/systemone -H 'content-type: application/json' -
 }'
 ```
 
+## Agent skills
+
+Same `SKILL.md` in `.cursor/skills/localjev-spark/`, `.claude/skills/`, `.agents/skills/`, `.codex/skills/`, and `.grok/skills/`. See `AGENTS.md`.
+
 ## License
 
 Apache-2.0. Not affiliated with TypeSafe, NVIDIA, or Laya beyond using their public packages/models.
