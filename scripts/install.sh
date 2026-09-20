@@ -20,7 +20,8 @@ mkdir -p "${HOME_DIR}" "${CONFIG_DIR}" "${LOG_DIR}"
 
 if [ ! -f "${CONFIG_FILE}" ]; then
     cat > "${CONFIG_FILE}" <<'EOF'
-LOCALJEV_BACKEND=laya
+# auto = laya-mlx on macOS, official torch laya on Linux. Force: laya-mlx | torch
+LOCALJEV_BACKEND=auto
 LOCALJEV_REPO=convaiinnovations/laya
 # LOCALJEV_SUBFOLDER=
 # LOCALJEV_BIND=127.0.0.1
@@ -34,6 +35,31 @@ fi
 # shellcheck disable=SC1090
 set -a && source "${CONFIG_FILE}" && set +a
 
+uname_s="$(uname -s)"
+# Old default "laya" meant the model, not "force torch". On Mac that is now laya-mlx.
+if [ "${uname_s}" = "Darwin" ] && [ "${LOCALJEV_BACKEND:-auto}" = "laya" ]; then
+    LOCALJEV_BACKEND=auto
+fi
+case "${LOCALJEV_BACKEND:-auto}" in
+    torch) EXTRA="laya"; LOCALJEV_BACKEND=laya ;;
+    laya-mlx) EXTRA="laya-mlx"; LOCALJEV_BACKEND=laya-mlx ;;
+    laya | localjev) EXTRA="laya"; LOCALJEV_BACKEND=laya ;;
+    mlx)
+        echo "LOCALJEV_BACKEND=mlx is not supported; use laya-mlx" >&2
+        exit 1
+        ;;
+    *)
+        if [ "${uname_s}" = "Darwin" ]; then
+            EXTRA="laya-mlx"
+            LOCALJEV_BACKEND=laya-mlx
+        else
+            EXTRA="laya"
+            LOCALJEV_BACKEND=laya
+        fi
+        ;;
+esac
+echo "Judge extra [${EXTRA}] backend=${LOCALJEV_BACKEND}"
+
 if ! command -v uv >/dev/null 2>&1; then
     echo "Installing uv..."
     curl -fsSL https://astral.sh/uv/install.sh | sh
@@ -46,10 +72,13 @@ fi
 
 export USE_TF=0
 if [ -n "${ROOT}" ] && [ -f "${ROOT}/pyproject.toml" ]; then
-    uv pip install --python "${HOME_DIR}/.venv/bin/python" -e "${ROOT}[laya]"
+    uv pip install --python "${HOME_DIR}/.venv/bin/python" -e "${ROOT}[${EXTRA}]"
 else
     uv pip install --python "${HOME_DIR}/.venv/bin/python" \
-        "localjev-spark[laya] @ git+https://github.com/rimusz/localjev-spark.git"
+        "localjev-spark[${EXTRA}] @ git+https://github.com/rimusz/localjev-spark.git"
+fi
+if [ "${EXTRA}" = "laya-mlx" ]; then
+    uv pip uninstall --python "${HOME_DIR}/.venv/bin/python" laya >/dev/null 2>&1 || true
 fi
 
 BIN="${HOME_DIR}/.venv/bin/localjev-spark"

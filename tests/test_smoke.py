@@ -16,6 +16,7 @@ from localjev_spark.util import (
     filter_hop_headers,
     last_user_text,
     parse_upstream,
+    resolve_backend,
     truncate,
 )
 
@@ -177,6 +178,23 @@ class LoopBoundLockTests(unittest.TestCase):
 
         self.assertEqual(asyncio.run(race(locked=False)), "http://dead:8000/v1")
         self.assertIsNone(asyncio.run(race(locked=True)))
+
+
+class BackendResolveTests(unittest.TestCase):
+    def test_auto_darwin_is_laya_mlx(self) -> None:
+        self.assertEqual(resolve_backend("auto", "darwin"), "laya-mlx")
+        self.assertEqual(resolve_backend("", "darwin"), "laya-mlx")
+
+    def test_auto_linux_is_laya(self) -> None:
+        self.assertEqual(resolve_backend("auto", "linux"), "laya")
+
+    def test_explicit(self) -> None:
+        self.assertEqual(resolve_backend("torch", "darwin"), "laya")
+        self.assertEqual(resolve_backend("laya-mlx", "darwin"), "laya-mlx")
+
+    def test_mlx_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_backend("mlx", "darwin")
 
 
 if __name__ == "__main__":

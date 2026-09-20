@@ -99,7 +99,7 @@ Spark is **one** live model. The proxy tries these ports in order and uses the f
 
 Hosts tried: `spark-local`, `spark`, `localhost`. Pin: `LOCALJEV_SPARK_UPSTREAM=http://YOUR-SPARK:8001/v1`.
 
-The **judge** model is Laya only. `LOCALJEV_REPO` must be a Laya-compatible Hugging Face id (default `convaiinnovations/laya`), not an arbitrary chat model. Edit `~/.config/localjev-spark/localjev.env` and re-run `./scripts/install.sh`. To change the **Spark** slot, start that slot or set `LOCALJEV_SPARK_UPSTREAM` — do not change `LOCALJEV_REPO`.
+The **judge** is still Laya. On **macOS** the installer uses [laya-mlx](https://github.com/mizorewww/laya-mlx) (`LOCALJEV_BACKEND=laya-mlx`). On **Linux** it uses official torch [laya](https://pypi.org/project/laya/) (`LOCALJEV_BACKEND=laya`). `LOCALJEV_REPO` must be a Laya-compatible Hugging Face id (default `convaiinnovations/laya`). Force torch on a Mac with `LOCALJEV_BACKEND=torch`. Edit `~/.config/localjev-spark/localjev.env` and re-run `./scripts/install.sh`. To change the **Spark** slot, start that slot or set `LOCALJEV_SPARK_UPSTREAM` — do not change `LOCALJEV_REPO`.
 
 ## Same host as official Jev
 

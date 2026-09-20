@@ -92,7 +92,8 @@ Pass install only if `:8090` is 200 and `:8091` is 200. Report `:8090` `backend`
 `~/.config/localjev-spark/localjev.env`:
 
 ```bash
-LOCALJEV_BACKEND=laya
+# auto = laya-mlx on macOS, official torch laya on Linux
+LOCALJEV_BACKEND=auto
 # Laya-compatible Hugging Face id only (not an arbitrary chat model)
 LOCALJEV_REPO=convaiinnovations/laya
 # LOCALJEV_BIND=127.0.0.1

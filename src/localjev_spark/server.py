@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from typing import Any
@@ -21,6 +22,7 @@ from localjev_spark.util import (
     filter_hop_headers,
     last_user_text,
     parse_upstream,
+    resolve_backend,
     truncate,
 )
 
@@ -39,7 +41,7 @@ def _env(*names: str, default: str = "") -> str:
 BIND = _env("LOCALJEV_BIND", default="0.0.0.0")
 JUDGE_PORT = int(_env("LOCALJEV_JUDGE_PORT", "LOCALJEV_SIDECAR_PORT", default="8090"))
 PROXY_PORT = int(_env("LOCALJEV_PROXY_PORT", default="8091"))
-BACKEND = _env("LOCALJEV_BACKEND", default="laya").strip().lower()
+BACKEND = resolve_backend(_env("LOCALJEV_BACKEND", default="auto"), sys.platform)
 MODEL_REPO = _env("LOCALJEV_REPO", default="convaiinnovations/laya")
 MODEL_SUBFOLDER = _env("LOCALJEV_SUBFOLDER").strip() or None
 SPARK_HOSTS = [
@@ -80,15 +82,19 @@ def _load_backend() -> None:
     global _agent, _agent_error, _load_done
     os.environ.setdefault("USE_TF", "0")
     try:
-        if BACKEND in {"laya", "localjev"}:
+        kwargs: dict[str, Any] = {}
+        if MODEL_SUBFOLDER:
+            kwargs["subfolder"] = MODEL_SUBFOLDER
+        if BACKEND == "laya-mlx":
+            import laya_mlx as laya
+
+            _agent = laya.load(MODEL_REPO, **kwargs)
+        elif BACKEND == "laya":
             import laya
 
-            kwargs: dict[str, Any] = {}
-            if MODEL_SUBFOLDER:
-                kwargs["subfolder"] = MODEL_SUBFOLDER
             _agent = laya.load(MODEL_REPO, **kwargs)
         else:
-            raise RuntimeError(f"unknown LOCALJEV_BACKEND={BACKEND!r} (supported: laya)")
+            raise RuntimeError(f"unknown backend={BACKEND!r} (supported: laya-mlx, laya)")
         _agent_error = None
         LOG.info("loaded backend=%s repo=%s subfolder=%s", BACKEND, MODEL_REPO, MODEL_SUBFOLDER)
     except Exception as exc:  # noqa: BLE001

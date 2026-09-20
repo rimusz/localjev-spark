@@ -26,6 +26,7 @@ TypeSafe Jev stays `[mcp_servers.jev]` + `jev-auto`. Agents must label which Jev
 - Uninstall: `localjev-spark uninstall` (keep venv) or `uninstall --purge`. Never delete TypeSafe `jev-auto` or Jev MCP.
 - Default bind is `0.0.0.0` with no auth. Trusted LAN/VPN only, or `LOCALJEV_BIND=127.0.0.1`.
 - `LOCALJEV_REPO` must be Laya-compatible. Soft fail is judge-predict-fail, not process-down.
+- macOS installs `[laya-mlx]`. Linux installs `[laya]` (torch). `LOCALJEV_BACKEND=auto` picks `laya-mlx` or `laya`. Force torch on a Mac with `torch`.
 
 ## Do not
 

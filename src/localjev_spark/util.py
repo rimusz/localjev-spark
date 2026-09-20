@@ -22,6 +22,18 @@ HOP_BY_HOP = {
 DROP_RESPONSE_EXTRA = {"date", "server"}
 
 
+def resolve_backend(raw: str, platform: str) -> str:
+    """Pick the Laya runtime. ``auto`` is laya-mlx on macOS, official torch laya on Linux."""
+    value = (raw or "auto").strip().lower()
+    if value in {"", "auto"}:
+        return "laya-mlx" if platform == "darwin" else "laya"
+    if value == "laya-mlx":
+        return "laya-mlx"
+    if value in {"laya", "localjev", "torch"}:
+        return "laya"
+    raise ValueError(f"unknown LOCALJEV_BACKEND={raw!r} (supported: auto, laya-mlx, laya)")
+
+
 def parse_upstream(url: str) -> str:
     """Normalize a Spark OpenAI base to `scheme://host:port/path` (default path `/v1`)."""
     raw = (url or "").strip()
